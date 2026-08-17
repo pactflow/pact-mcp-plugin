@@ -4,7 +4,7 @@ Consumer-driven **contract testing for [Model Context Protocol (MCP)](https://mo
 
 Test that an AI agent (MCP **client**) and the MCP **server** it depends on agree on the shape of `tools/call`, `tools/list`, `resources/read|list`, `prompts/get|list`, and their results — without spinning up the whole stack. You author expectations against your **real** `@modelcontextprotocol/sdk` `Client`, and verify them against your **real** MCP server. No stubbing, no service decomposition.
 
-> **Status:** MVP+. stdio + Streamable HTTP transports, HTTP auth (bearer / API key / custom headers), provider verification **through the stock pact-js `Verifier`**, provider states, consumer mocks, multi-interaction pacts, and a TypeScript adapter — all proven end-to-end against real MCP clients/servers and the real Pact toolchain. See the [roadmap](#roadmap).
+> **Status:** MVP+. stdio + Streamable HTTP transports, HTTP auth (bearer / API key / custom headers / OAuth2 client credentials), provider verification **through the stock pact-js `Verifier`**, provider states, consumer mocks, multi-interaction pacts, and a TypeScript adapter — all proven end-to-end against real MCP clients/servers and the real Pact toolchain. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -17,6 +17,7 @@ Test that an AI agent (MCP **client**) and the MCP **server** it depends on agre
 | | stdio | Streamable HTTP |
 |---|---|---|
 | Provider verification | ✅ | ✅ (+ bearer / API key / custom headers) |
+| OAuth2 client-credentials auth | — | ✅ (SEP-1046; see ADR 0011) |
 | Standard pact-js `Verifier` support | ✅ | ✅ |
 | Provider states (`given(...)` + `stateHandlers`) | ✅ | ✅ |
 | Consumer mock | ✅ | ✅ (loopback) |
@@ -144,7 +145,12 @@ job requests an `id-token` and publishes with automatic provenance.
 
 ## Roadmap
 
-- OAuth2 dynamic client registration (the `AuthProvider` seam is ready)
+- OAuth2 dynamic client registration + the interactive authorization-code flow
+  (client-credentials, the CI-friendly machine-to-machine grant, shipped —
+  see ADR 0011; the `AuthProvider`/rmcp wiring makes this additive)
+- A fixture authorization-server end-to-end (discover -> token -> verify)
+  covering the full OAuth2 client-credentials round trip, beyond today's
+  unit/mocked-token-endpoint tests
 - Python / Go adapters + Java/.NET loopback examples (the shared spec + engine make these additive)
 - Optional in-memory adapter DX for TS/Python/Go
 

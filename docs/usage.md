@@ -19,10 +19,55 @@ resolved from the process environment at verification time:
 A missing env var is a hard error (never a silent empty header). The invariant
 "secrets never land in the persisted pact" is enforced by construction
 (`config.rs` has no auth input) and covered by a test
-(`auth.rs::secrets_never_land_in_the_persisted_pact_fragment`).
+(`auth.rs::secrets_never_land_in_the_persisted_pact_fragment`, extended to the
+`oauth` kind below).
 
 Auth is injected on **every** HTTP request, including the `initialize` handshake.
 stdio transports pass auth via env/args (no HTTP headers).
+
+## OAuth2 (client credentials)
+
+For machine-to-machine / CI verification against an OAuth2-protected MCP
+server, use `type: "oauth"` — client-credentials (SEP-1046) is the only
+supported grant (see ADR 0011 for why dynamic client registration / the
+interactive authorization-code flow are out of scope for provider
+verification):
+
+```jsonc
+{
+  "type": "oauth",
+  "grant": "client_credentials",       // optional — the only supported grant
+  "clientId": "${MCP_OAUTH_CLIENT_ID}",
+  "clientSecret": "${MCP_OAUTH_CLIENT_SECRET}",
+  "scopes": ["mcp:verify"],            // optional
+  "resource": "https://mcp.example.com/mcp" // optional; defaults to the server's base URL
+}
+```
+
+Like the other auth kinds, `clientId`/`clientSecret` support `${ENV}`
+interpolation and are never persisted to the pact. Unlike them, the token
+isn't resolved up front: the engine runs rmcp's client-credentials flow
+(discover metadata, exchange credentials for a token) when it connects to the
+server, and the resulting `Authorization: Bearer …` is injected — and
+refreshed — on every request by the same transport that handles static
+headers. A failed exchange (bad credentials, unreachable authorization
+server, missing `resource`) surfaces as a clear verification failure, the
+same as a 401 does for the other auth kinds.
+
+```ts
+await new McpProviderVerifier({ provider: "weather-mcp", pactUrls: [...] })
+  .withServerTransport({
+    type: "http",
+    url: "https://mcp.example.com/mcp",
+    auth: {
+      type: "oauth",
+      clientId: "${MCP_OAUTH_CLIENT_ID}",
+      clientSecret: "${MCP_OAUTH_CLIENT_SECRET}",
+      scopes: ["mcp:verify"],
+    },
+  })
+  .verify();
+```
 
 ## Provider verification — standard pact-js Verifier (recommended)
 
