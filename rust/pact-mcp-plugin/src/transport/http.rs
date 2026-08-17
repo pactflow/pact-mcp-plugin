@@ -9,6 +9,7 @@ use crate::auth::ResolvedAuth;
 use crate::mcp::model::Operation;
 use http::{HeaderName, HeaderValue};
 use rmcp::service::{RoleClient, RunningService};
+use rmcp::transport::auth::{AuthClient, ClientCredentialsConfig, OAuthState};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::ServiceExt;
@@ -37,10 +38,16 @@ fn ensure_default_crypto_provider() {
 
 impl HttpClient {
     /// Connect to `url` and complete the initialize handshake, injecting the
-    /// resolved auth (bearer -> auth_header, apiKey/headers -> custom_headers)
-    /// on every request.
+    /// resolved auth on every request: bearer -> auth_header, apiKey/headers
+    /// -> custom_headers (static, today's path), or oauth -> a client-
+    /// credentials token exchange whose access token rmcp's `AuthClient`
+    /// injects (and refreshes) on every request (ADR 0011).
     pub async fn connect(url: &str, auth: &ResolvedAuth) -> Result<Self, TransportError> {
         ensure_default_crypto_provider();
+
+        if let Some(oauth) = &auth.oauth {
+            return Self::connect_oauth(url, oauth).await;
+        }
 
         let mut custom_headers: HashMap<HeaderName, HeaderValue> = HashMap::new();
         for (name, value) in &auth.custom_headers {
@@ -57,6 +64,48 @@ impl HttpClient {
         }
 
         let transport = StreamableHttpClientTransport::from_config(config);
+        let service = ()
+            .serve(transport)
+            .await
+            .map_err(|e| TransportError::Handshake(e.to_string()))?;
+
+        Ok(Self { service })
+    }
+
+    /// OAuth 2.0 client-credentials connect path (SEP-1046, ADR 0011): run
+    /// the whole discover -> configure -> exchange flow via rmcp's
+    /// `OAuthState`, then hand the resulting `AuthorizationManager` to
+    /// `AuthClient` — a different inner client for the SAME
+    /// `StreamableHttpClientTransport`, not a new transport. `AuthClient`
+    /// injects (and refreshes) `Authorization: Bearer <token>` on every
+    /// request itself, so no static `auth_header`/`custom_headers` are set on
+    /// the transport config here.
+    async fn connect_oauth(url: &str, oauth: &crate::auth::OAuthClientCredentials) -> Result<Self, TransportError> {
+        // `resource` is REQUIRED by the MCP auth spec / rmcp's exchange —
+        // default to the MCP server's own base URL when the config omits it.
+        let resource = oauth.resource.clone().unwrap_or_else(|| url.to_string());
+
+        let mut state = OAuthState::new(url, Some(reqwest::Client::new()))
+            .await
+            .map_err(|e| TransportError::Connect(format!("oauth: failed to initialize OAuth state: {e}")))?;
+
+        state
+            .authenticate_client_credentials(ClientCredentialsConfig::ClientSecret {
+                client_id: oauth.client_id.clone(),
+                client_secret: oauth.client_secret.clone(),
+                scopes: oauth.scopes.clone(),
+                resource: Some(resource),
+            })
+            .await
+            .map_err(|e| TransportError::Handshake(format!("oauth client-credentials exchange failed: {e}")))?;
+
+        let manager = state.into_authorization_manager().ok_or_else(|| {
+            TransportError::Handshake("oauth: state was not Authorized after a successful exchange".to_string())
+        })?;
+
+        let auth_client = AuthClient::new(reqwest::Client::new(), manager);
+        let config = StreamableHttpClientTransportConfig::with_uri(url);
+        let transport = StreamableHttpClientTransport::with_client(auth_client, config);
         let service = ()
             .serve(transport)
             .await

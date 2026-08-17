@@ -5,6 +5,13 @@
 // initialize POST):
 //   REQUIRE_BEARER=<token>                      -> requires `Authorization: Bearer <token>`
 //   REQUIRE_API_KEY_HEADER + REQUIRE_API_KEY_VALUE -> requires that header == value
+// Optionally serves a mocked OAuth2 client-credentials token endpoint on the
+// SAME origin (so rmcp's discovery legacy-fallback `/token` derivation finds
+// it — see ADR 0011 T3): unauthenticated `POST /token` always returns
+//   OAUTH_ACCESS_TOKEN=<token> -> {"access_token": "<token>", "token_type": "Bearer", "expires_in": 3600}
+// Combine with REQUIRE_BEARER=<same token> to simulate the resource server
+// accepting the exchanged token. This is a unit-test stub, NOT a real
+// authorization server (no discovery metadata, no client validation).
 // Prints one line `{"port":<n>}` to stdout once listening (so tests can capture
 // the ephemeral port). PORT env overrides the port (0 = ephemeral).
 import { createServer } from "node:http";
@@ -32,6 +39,7 @@ function buildServer() {
 const REQUIRE_BEARER = process.env.REQUIRE_BEARER;
 const REQUIRE_API_KEY_HEADER = process.env.REQUIRE_API_KEY_HEADER;
 const REQUIRE_API_KEY_VALUE = process.env.REQUIRE_API_KEY_VALUE;
+const OAUTH_ACCESS_TOKEN = process.env.OAUTH_ACCESS_TOKEN;
 
 function authOk(req) {
   if (REQUIRE_BEARER) {
@@ -54,6 +62,17 @@ async function readBody(req) {
 }
 
 const httpServer = createServer(async (req, res) => {
+  // Mocked token endpoint (unauthenticated, on purpose — the token exchange
+  // request itself carries the client credentials, not a bearer token).
+  if (OAUTH_ACCESS_TOKEN && req.method === "POST" && req.url.split("?")[0] === "/token") {
+    for await (const _chunk of req) {
+      // drain the client_credentials-grant body; this stub doesn't validate it.
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ access_token: OAUTH_ACCESS_TOKEN, token_type: "Bearer", expires_in: 3600 }));
+    return;
+  }
+
   if (!authOk(req)) {
     res.writeHead(401, { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" });
     res.end(JSON.stringify({ error: "unauthorized" }));
