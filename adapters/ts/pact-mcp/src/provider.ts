@@ -13,7 +13,17 @@ import { Verifier, VerifierOptions } from "@pact-foundation/pact";
 export type HttpAuth =
   | { type: "bearer"; token: string }
   | { type: "apiKey"; header: string; value: string }
-  | { type: "headers"; headers: Record<string, string> };
+  | { type: "headers"; headers: Record<string, string> }
+  | {
+      /** OAuth 2.0 client-credentials (SEP-1046). Only supported grant — see ADR 0011. */
+      type: "oauth";
+      grant?: "client_credentials";
+      clientId: string;
+      clientSecret: string;
+      scopes?: string[];
+      /** RFC 8707 resource indicator; defaults to the server's base URL when omitted. */
+      resource?: string;
+    };
 
 /** Provider-state setup callback, keyed by state name; receives the state params. */
 export type StateHandler = (params: Record<string, unknown>) => Promise<unknown> | unknown;
