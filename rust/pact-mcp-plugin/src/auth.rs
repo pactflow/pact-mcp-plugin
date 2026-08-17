@@ -1,12 +1,18 @@
-//! Auth for HTTP transports (Phase 2). See ADR 0007.
+//! Auth for HTTP transports (Phase 2, +OAuth2 Phase 4). See ADR 0007, ADR 0011.
 //!
 //! `AuthProvider` resolves an auth config into headers injected on EVERY HTTP
-//! request (including `initialize`). Three concrete kinds: `bearer`, `apiKey`,
-//! `headers`. All values support `${ENV}` interpolation resolved from the
-//! process environment at verification time. Secrets are NEVER persisted to the
-//! pact — auth lives only on the verification/transport config. The trait seam
-//! is left clean for OAuth2 (Phase 4), which will resolve to the same
-//! `ResolvedAuth`.
+//! request (including `initialize`). Four concrete kinds: `bearer`, `apiKey`,
+//! `headers`, `oauth`. All values support `${ENV}` interpolation resolved from
+//! the process environment at verification time. Secrets are NEVER persisted
+//! to the pact — auth lives only on the verification/transport config.
+//!
+//! `oauth` (client-credentials, SEP-1046, ADR 0011) is different from the
+//! other three: it can't resolve to a static header synchronously — it needs
+//! an async token exchange against the live server, and the token must be
+//! refreshable by the transport. So `resolve()` stays sync and only carries
+//! the (env-interpolated) client-credentials config on `ResolvedAuth.oauth`;
+//! the actual token exchange happens in the transport (`transport::http`),
+//! where we have the base URL and an async context.
 
 use serde_json::Value;
 use thiserror::Error;
@@ -26,6 +32,23 @@ pub struct ResolvedAuth {
     pub auth_header: Option<String>,
     /// Arbitrary custom headers (name, value).
     pub custom_headers: Vec<(String, String)>,
+    /// OAuth2 client-credentials config (ADR 0011), carried — not resolved to
+    /// a header. `Some` only for `type: "oauth"`; the transport performs the
+    /// token exchange.
+    pub oauth: Option<OAuthClientCredentials>,
+}
+
+/// OAuth 2.0 client-credentials config (SEP-1046), resolved (`${ENV}`
+/// interpolated) but not yet exchanged for a token. See ADR 0011.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OAuthClientCredentials {
+    pub client_id: String,
+    pub client_secret: String,
+    pub scopes: Vec<String>,
+    /// The RFC 8707 `resource` indicator. Mandatory to rmcp's token exchange;
+    /// when the config omits it, the transport defaults it to the MCP server
+    /// base URL (rmcp errors on `None` at exchange time).
+    pub resource: Option<String>,
 }
 
 /// Resolves auth material (with `${ENV}` interpolation) into headers.
@@ -43,6 +66,7 @@ impl AuthProvider for BearerAuth {
         Ok(ResolvedAuth {
             auth_header: Some(interpolate_env(&self.token)?),
             custom_headers: vec![],
+            oauth: None,
         })
     }
 }
@@ -58,6 +82,7 @@ impl AuthProvider for ApiKeyAuth {
         Ok(ResolvedAuth {
             auth_header: None,
             custom_headers: vec![(self.header.clone(), interpolate_env(&self.value)?)],
+            oauth: None,
         })
     }
 }
@@ -73,7 +98,32 @@ impl AuthProvider for HeadersAuth {
         for (k, v) in &self.headers {
             out.push((k.clone(), interpolate_env(v)?));
         }
-        Ok(ResolvedAuth { auth_header: None, custom_headers: out })
+        Ok(ResolvedAuth { auth_header: None, custom_headers: out, oauth: None })
+    }
+}
+
+/// OAuth 2.0 client-credentials (SEP-1046, ADR 0011). Only `grant:
+/// "client_credentials"` is supported in this phase — see ADR 0011 for why
+/// dynamic client registration / interactive flows are out of scope.
+#[derive(Debug, Clone)]
+pub struct OAuthAuth {
+    pub client_id: String,
+    pub client_secret: String,
+    pub scopes: Vec<String>,
+    pub resource: Option<String>,
+}
+impl AuthProvider for OAuthAuth {
+    fn resolve(&self) -> Result<ResolvedAuth, AuthError> {
+        Ok(ResolvedAuth {
+            auth_header: None,
+            custom_headers: vec![],
+            oauth: Some(OAuthClientCredentials {
+                client_id: interpolate_env(&self.client_id)?,
+                client_secret: interpolate_env(&self.client_secret)?,
+                scopes: self.scopes.clone(),
+                resource: self.resource.clone(),
+            }),
+        })
     }
 }
 
@@ -83,6 +133,9 @@ impl AuthProvider for HeadersAuth {
 /// { "type": "bearer",  "token": "${MCP_TOKEN}" }
 /// { "type": "apiKey",  "header": "X-API-Key", "value": "${MCP_KEY}" }
 /// { "type": "headers", "headers": { "X-A": "1", "X-B": "${B}" } }
+/// { "type": "oauth", "grant": "client_credentials",
+///   "clientId": "${MCP_OAUTH_CLIENT_ID}", "clientSecret": "${MCP_OAUTH_CLIENT_SECRET}",
+///   "scopes": ["mcp:verify"], "resource": "https://mcp.example.com/mcp" }
 /// ```
 pub fn from_config(config: &Value) -> Result<Box<dyn AuthProvider>, AuthError> {
     let kind = config
@@ -118,6 +171,34 @@ pub fn from_config(config: &Value) -> Result<Box<dyn AuthProvider>, AuthError> {
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect();
             Ok(Box::new(HeadersAuth { headers }))
+        }
+        "oauth" => {
+            let grant = config.get("grant").and_then(Value::as_str).unwrap_or("client_credentials");
+            if grant != "client_credentials" {
+                return Err(AuthError::Invalid(format!(
+                    "unsupported oauth grant `{grant}` — only `client_credentials` is supported (see ADR 0011)"
+                )));
+            }
+            let client_id = config
+                .get("clientId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AuthError::Invalid("oauth auth requires `clientId`".to_string()))?;
+            let client_secret = config
+                .get("clientSecret")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AuthError::Invalid("oauth auth requires `clientSecret`".to_string()))?;
+            let scopes = config
+                .get("scopes")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            let resource = config.get("resource").and_then(Value::as_str).map(str::to_string);
+            Ok(Box::new(OAuthAuth {
+                client_id: client_id.to_string(),
+                client_secret: client_secret.to_string(),
+                scopes,
+                resource,
+            }))
         }
         other => Err(AuthError::Invalid(format!("unknown auth type `{other}`"))),
     }
@@ -225,5 +306,118 @@ mod tests {
         assert!(!request_json.contains("TOPSECRET"));
         assert!(!response_json.contains("TOPSECRET"));
         assert!(!serde_json::to_string(&configured.fragment).unwrap().contains("TOPSECRET"));
+    }
+
+    /// Same invariant as above, extended to the `oauth` kind (ADR 0011,
+    /// T2): a resolved oauth client_secret must never reach the persisted
+    /// pact fragment either.
+    #[test]
+    fn oauth_secrets_never_land_in_the_persisted_pact_fragment() {
+        std::env::set_var("PACT_MCP_OAUTH_SECRET", "TOPSECRET_OAUTH");
+        let auth = resolve_config(Some(&serde_json::json!({
+            "type": "oauth",
+            "grant": "client_credentials",
+            "clientId": "my-client",
+            "clientSecret": "${PACT_MCP_OAUTH_SECRET}",
+            "scopes": ["mcp:verify"]
+        })))
+        .unwrap();
+        assert_eq!(auth.oauth.as_ref().unwrap().client_secret, "TOPSECRET_OAUTH");
+
+        let configured = crate::config::configure_interaction(&serde_json::json!({
+            "operation": "tools/call",
+            "request": { "name": "get_weather", "arguments": { "city": "Melbourne" } },
+            "response": { "content": [ { "type": "text", "text": "Sunny" } ], "isError": false }
+        }))
+        .unwrap();
+
+        let request_json = String::from_utf8(configured.request.body_bytes).unwrap();
+        let response_json = String::from_utf8(configured.response.body_bytes).unwrap();
+        assert!(!request_json.contains("TOPSECRET_OAUTH"));
+        assert!(!response_json.contains("TOPSECRET_OAUTH"));
+        assert!(!serde_json::to_string(&configured.fragment).unwrap().contains("TOPSECRET_OAUTH"));
+    }
+
+    #[test]
+    fn oauth_parses_and_resolves_client_credentials() {
+        let a = from_config(&serde_json::json!({
+            "type": "oauth",
+            "grant": "client_credentials",
+            "clientId": "my-client",
+            "clientSecret": "my-secret",
+            "scopes": ["mcp:verify", "mcp:admin"],
+            "resource": "https://mcp.example.com/mcp"
+        }))
+        .unwrap();
+        let r = a.resolve().unwrap();
+        assert_eq!(r.auth_header, None);
+        assert!(r.custom_headers.is_empty());
+        let oauth = r.oauth.expect("oauth config should be carried");
+        assert_eq!(oauth.client_id, "my-client");
+        assert_eq!(oauth.client_secret, "my-secret");
+        assert_eq!(oauth.scopes, vec!["mcp:verify".to_string(), "mcp:admin".to_string()]);
+        assert_eq!(oauth.resource.as_deref(), Some("https://mcp.example.com/mcp"));
+    }
+
+    #[test]
+    fn oauth_grant_defaults_to_client_credentials_when_omitted() {
+        let a = from_config(&serde_json::json!({
+            "type": "oauth", "clientId": "c", "clientSecret": "s"
+        }))
+        .unwrap();
+        let r = a.resolve().unwrap();
+        assert!(r.oauth.is_some());
+    }
+
+    #[test]
+    fn oauth_rejects_unsupported_grants() {
+        let err = from_config(&serde_json::json!({
+            "type": "oauth",
+            "grant": "authorization_code",
+            "clientId": "c",
+            "clientSecret": "s"
+        }))
+        .unwrap_err();
+        assert!(matches!(err, AuthError::Invalid(_)));
+        assert!(err.to_string().contains("client_credentials"));
+    }
+
+    #[test]
+    fn oauth_requires_client_id() {
+        let err = from_config(&serde_json::json!({ "type": "oauth", "clientSecret": "s" })).unwrap_err();
+        assert!(matches!(err, AuthError::Invalid(_)));
+    }
+
+    #[test]
+    fn oauth_requires_client_secret() {
+        let err = from_config(&serde_json::json!({ "type": "oauth", "clientId": "c" })).unwrap_err();
+        assert!(matches!(err, AuthError::Invalid(_)));
+    }
+
+    #[test]
+    fn oauth_env_interpolates_client_id_and_secret() {
+        std::env::set_var("PACT_MCP_TEST_OAUTH_ID", "resolved-id");
+        std::env::set_var("PACT_MCP_TEST_OAUTH_SECRET", "resolved-secret");
+        let a = from_config(&serde_json::json!({
+            "type": "oauth",
+            "clientId": "${PACT_MCP_TEST_OAUTH_ID}",
+            "clientSecret": "${PACT_MCP_TEST_OAUTH_SECRET}"
+        }))
+        .unwrap();
+        let r = a.resolve().unwrap();
+        let oauth = r.oauth.unwrap();
+        assert_eq!(oauth.client_id, "resolved-id");
+        assert_eq!(oauth.client_secret, "resolved-secret");
+    }
+
+    #[test]
+    fn oauth_missing_env_is_an_error() {
+        let a = from_config(&serde_json::json!({
+            "type": "oauth",
+            "clientId": "c",
+            "clientSecret": "${PACT_MCP_OAUTH_DEFINITELY_UNSET}"
+        }))
+        .unwrap();
+        assert!(matches!(a.resolve(), Err(AuthError::MissingEnv(_))));
     }
 }
