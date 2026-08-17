@@ -4,8 +4,6 @@ Consumer-driven **contract testing for [Model Context Protocol (MCP)](https://mo
 
 Test that an AI agent (MCP **client**) and the MCP **server** it depends on agree on the shape of `tools/call`, `tools/list`, `resources/read|list`, `prompts/get|list`, and their results — without spinning up the whole stack. You author expectations against your **real** `@modelcontextprotocol/sdk` `Client`, and verify them against your **real** MCP server. No stubbing, no service decomposition.
 
-> **Status:** MVP+. stdio + Streamable HTTP transports, HTTP auth (bearer / API key / custom headers), provider verification **through the stock pact-js `Verifier`**, provider states, consumer mocks, multi-interaction pacts, and a TypeScript adapter — all proven end-to-end against real MCP clients/servers and the real Pact toolchain. See the [roadmap](#roadmap).
-
 ## Why
 
 - **MCP has no contract-testing story.** Agents break when a server changes a tool's arguments or result shape; servers break their consumers without knowing.
@@ -74,79 +72,6 @@ await new McpProviderVerifier({ provider: "weather-mcp", pactUrls: ["./pacts/wea
 ```
 
 Pacts also verify through the **stock pact-js `Verifier`** (broker fetch, result publishing, `can-i-deploy` — see [`docs/usage.md`](docs/usage.md) and [`docs/bdct-walkthrough.md`](docs/bdct-walkthrough.md)). Provider states, `tools/list` / `resources/*` / `prompts/*` expectations, and multi-interaction tests are covered in [`adapters/ts/pact-mcp/README.md`](adapters/ts/pact-mcp/README.md).
-
-## Architecture
-
-```
-Shared contract spec (docs/spec/)  ── the pact schema + MCP matching semantics
-        │ implemented by
-Rust engine (rust/pact-mcp-plugin/) ── Pact plugin over gRPC: matching, generation,
-        │                              stdio + Streamable HTTP transports, auth, mocks
-        ├── TypeScript adapter (adapters/ts/pact-mcp/) ── thin DX; matching stays in the engine
-        └── any Pact language (Java/.NET/Go/…) via the engine over a real transport
-```
-
-The engine is the universal backbone; each language connects its **real** MCP client/server to the engine's mock/verifier over a real transport (stdio or loopback HTTP). This is the one approach that works across every MCP SDK (all have stdio + HTTP client transports), including Java/.NET. See [`docs/plans/pact-mcp-plugin-implementation-plan.md`](docs/plans/pact-mcp-plugin-implementation-plan.md) and the [ADRs](docs/decisions/).
-
-## Repository layout
-
-```
-docs/
-  spec/           # shared contract spec + conformance fixtures (the anti-divergence gate)
-  plans/          # implementation plan (source of truth)
-  decisions/      # ADRs
-  usage.md        # HTTP + auth usage
-rust/
-  pact-mcp-plugin/ # the engine (single binary Pact plugin)
-adapters/
-  ts/pact-mcp/    # TypeScript adapter (@pactflow/pact-mcp-plugin)
-examples/         # runnable consumer/provider examples + fixture MCP servers
-pact-plugin.json  # Pact plugin manifest (name: mcp)
-```
-
-## Build & test
-
-```sh
-# Rust engine
-cd rust && cargo test -p pact-mcp-plugin
-
-# TypeScript adapter (drives the engine)
-cd adapters/ts/pact-mcp && npm install && npm test
-```
-
-## Releasing
-
-CI (`.github/workflows/ci.yml`) runs on every push/PR: the Rust engine (Linux +
-macOS build/test/clippy, Windows build smoke, conformance as a named gate) and
-the full TypeScript E2E suite (stock pact-js `Verifier`, provider states,
-resources/prompts, multi-interaction) plus a publishable `npm pack` check.
-
-Releases are **conventional-commit driven** via
-[release-please](https://github.com/googleapis/release-please)
-(`.github/workflows/release-please.yml`), so use Conventional Commits on `main`
-(`feat:` → minor, `fix:` → patch, `feat!:`/`BREAKING CHANGE:` → major).
-
-1. On each push to `main`, release-please maintains a **release PR** that bumps
-   the version — `pact-plugin.json`, `adapters/ts/pact-mcp/package.json`, and
-   `rust/Cargo.toml` are kept in lockstep — and updates `CHANGELOG.md`.
-2. **Merge the release PR** to cut the release. In the same workflow run:
-   - **build-release** builds the engine for linux/osx (x86_64 + aarch64) and windows and attaches per-platform `*.gz` + `.sha256`, a version-stamped `pact-plugin.json`, and `install-plugin.sh` to the GitHub Release (naming follows the pact-plugin ecosystem convention).
-   - **publish-npm** publishes `@pactflow/pact-mcp-plugin`; end users' `postinstall` then provisions the matching engine binary.
-
-Publishing uses npm **trusted publishing** (OIDC) — no `NPM_TOKEN` secret.
-Configure a trusted publisher for the package on npmjs.com pointing at this repo
-and the **`release-please.yml`** workflow (that's where `npm publish` runs); the
-job requests an `id-token` and publishes with automatic provenance.
-
-> **First release:** the package name must exist on npm before trusted
-> publishing works. Publish a one-time placeholder (`@pactflow/pact-mcp-plugin@0.0.1`),
-> configure the trusted publisher, then let release-please cut `0.1.0`.
-
-## Roadmap
-
-- OAuth2 dynamic client registration (the `AuthProvider` seam is ready)
-- Python / Go adapters + Java/.NET loopback examples (the shared spec + engine make these additive)
-- Optional in-memory adapter DX for TS/Python/Go
 
 ## License
 
