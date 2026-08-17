@@ -15,15 +15,12 @@ Test that an AI agent (MCP **client**) and the MCP **server** it depends on agre
 | | stdio | Streamable HTTP |
 |---|---|---|
 | Provider verification | ✅ | ✅ (+ bearer / API key / custom headers) |
-| Standard pact-js `Verifier` support | ✅ | ✅ |
-| Provider states (`given(...)` + `stateHandlers`) | ✅ | ✅ |
+| OAuth2 (client-credentials) | — | ✅ |
 | Consumer mock | ✅ | ✅ (loopback) |
 | `tools/call` / `tools/list`, `resources/read` / `resources/list`, `prompts/get` / `prompts/list` | ✅ | ✅ |
 | Auto `initialize` handshake + capability negotiation | ✅ | ✅ |
-| Matching in the shared Rust engine | ✅ | ✅ |
-| TypeScript adapter DX | ✅ | ✅ |
-
-Auth secrets use `${ENV}` interpolation and are **never written to the pact**.
+| Core plugin (Rust / all languages) | ✅ | ✅ |
+| TypeScript API (for improved DX) | ✅ | ✅ |
 
 ## Quick start (TypeScript)
 
