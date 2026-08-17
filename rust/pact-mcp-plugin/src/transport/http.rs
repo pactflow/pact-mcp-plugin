@@ -20,11 +20,28 @@ pub struct HttpClient {
     service: RunningService<RoleClient, ()>,
 }
 
+/// rustls (pulled in transitively via reqwest, and directly for the OAuth
+/// client-credentials exchange — ADR 0011) does not auto-install a default
+/// crypto provider even when a single backend is compiled in; building a
+/// `reqwest::Client` panics until one is installed. Do it once, lazily, right
+/// before the first client is built — cheap and idempotent.
+fn ensure_default_crypto_provider() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        // `install_default` fails only if a provider is already installed
+        // (e.g. by another crate in the process); either way one is present
+        // afterwards, so a failed install is not an error for us.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
 impl HttpClient {
     /// Connect to `url` and complete the initialize handshake, injecting the
     /// resolved auth (bearer -> auth_header, apiKey/headers -> custom_headers)
     /// on every request.
     pub async fn connect(url: &str, auth: &ResolvedAuth) -> Result<Self, TransportError> {
+        ensure_default_crypto_provider();
+
         let mut custom_headers: HashMap<HeaderName, HeaderValue> = HashMap::new();
         for (name, value) in &auth.custom_headers {
             let hn = HeaderName::from_bytes(name.as_bytes())
