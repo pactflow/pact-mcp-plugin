@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "pluginInterfaceVersion": 1,
   "name": "mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "executableType": "exec",
   "minimumRequiredVersion": "0.1.0",
   "entryPoint": "pact-mcp-plugin",

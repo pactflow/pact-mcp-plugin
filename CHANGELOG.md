@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/pactflow/pact-mcp-plugin/compare/v0.2.0...v0.3.0) (2026-08-18)
+
+
+### Features
+
+* **auth:** enable rmcp OAuth2 auth feature + fix rustls crypto-provider panic ([6e233ae](https://github.com/pactflow/pact-mcp-plugin/commit/6e233aec91a147a1e2ab5c24ed8d944be16cc6d3))
+* **auth:** OAuth2 client-credentials for MCP provider verification ([8cc00dd](https://github.com/pactflow/pact-mcp-plugin/commit/8cc00dd98cf832b94e9ebbb7ffd26f4a76c35656))
+* **auth:** OAuth2 client-credentials transport path (ADR 0011) ([50a6bad](https://github.com/pactflow/pact-mcp-plugin/commit/50a6bad8f422d9ddc6f792c50897a87dce9295c9))
+* **auth:** parse + carry OAuth2 client-credentials config (ADR 0011) ([f7d67e6](https://github.com/pactflow/pact-mcp-plugin/commit/f7d67e65328f12641c39eec210c9a6dd3d97f50a))
+* **ts:** add oauth arm to HttpAuth (ADR 0011) ([bd411c9](https://github.com/pactflow/pact-mcp-plugin/commit/bd411c92499477befa04265db6fcf19044a2d2cc))
+
 ## [0.2.0](https://github.com/mefellows/pact-mcp-plugin/compare/v0.1.0...v0.2.0) (2026-07-31)
 
 
