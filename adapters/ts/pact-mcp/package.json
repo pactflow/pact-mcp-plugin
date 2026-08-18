@@ -1,6 +1,6 @@
 {
   "name": "@pactflow/pact-mcp-plugin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Pact contract testing for Model Context Protocol (MCP) servers and clients. Ships an ergonomic TypeScript consumer/provider DX and provisions the Rust matching engine (the Pact `mcp` plugin) on install.",
   "license": "MIT",
   "type": "commonjs",
