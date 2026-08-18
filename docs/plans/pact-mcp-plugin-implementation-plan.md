@@ -281,8 +281,29 @@ Write the failing test first; keep tasks bite-sized; commit per task; don't adva
 - [ ] Cross-platform release packaging (§12); CI matrix (Rust + each adapter + conformance).
 - [ ] PactFlow publish + `can-i-deploy` walkthrough (BDCT positioning).
 
-### Phase 4 — OAuth2 dynamic client registration (deferred)
-- [ ] OAuth2 `AuthProvider`: discovery, dynamic client registration (RFC 7591), token acquire/refresh, injection. Slots into the §9 seam with no core refactor; test vs a fixture OAuth-protected MCP server.
+### Phase 4 — OAuth2
+
+- [x] OAuth2 **client-credentials** (SEP-1046) `AuthProvider`: discovery,
+  token acquire/refresh, injection, reusing rmcp 2.2.0's built-in OAuth2
+  implementation (the `auth` cargo feature) rather than hand-rolling it.
+  Slotted into the §9 `ResolvedAuth` seam with no core refactor beyond adding
+  an `oauth` carrying field. See
+  `docs/plans/oauth-client-credentials-plan.md` and ADR 0011 for the full
+  design and the T0–T7 task breakdown. Tests are unit/mocked (a stubbed
+  `/token` endpoint on the existing HTTP fixture server) — engine
+  (`cargo test`) + TS DSL (`npm test`) both green.
+- [ ] **Deferred:** dynamic client registration (RFC 7591) and the
+  interactive authorization-code flow — rmcp's `register_client` hardcodes
+  the interactive grant, which cannot run unattended in CI (see ADR 0011
+  §"Why dynamic client registration is off the CI path"). The `AuthProvider`/
+  rmcp wiring added for client-credentials makes this purely additive.
+- [ ] **Deferred:** a fixture authorization server (`/.well-known/*`,
+  `/token`, optional `/register`) + protected MCP fixture, for a full
+  discover → token → verify end-to-end test beyond today's unit/mocked
+  coverage.
+- [ ] **Deferred:** `private_key_jwt` client-credentials
+  (`auth-client-credentials-jwt` rmcp feature) and cross-spawn token caching
+  (rmcp's `AuthClient` already refreshes within a session).
 
 ---
 
@@ -312,7 +333,7 @@ Record, don't build here. Drift ingests an MCP server's `tools/list` self-descri
 
 ## 15. Non-goals (MVP)
 
-OAuth2 (Phase 4), deprecated HTTP+SSE transport, MCP `sampling`/`roots`/`elicitation`, schema-conformance-from-`tools/list` (that's Drift-MCP, §13), notifications beyond `initialized`, multi-server orchestration, first-class in-memory transports for Java/.NET (use loopback fallback; contributing them upstream is optional future work). **Python/Go native adapters and the Java loopback example are deferred** — the TS adapter ships first; the shared spec + engine make the rest additive.
+OAuth2 dynamic client registration + the interactive authorization-code flow (client-credentials shipped in Phase 4 — see ADR 0011), deprecated HTTP+SSE transport, MCP `sampling`/`roots`/`elicitation`, schema-conformance-from-`tools/list` (that's Drift-MCP, §13), notifications beyond `initialized`, multi-server orchestration, first-class in-memory transports for Java/.NET (use loopback fallback; contributing them upstream is optional future work). **Python/Go native adapters and the Java loopback example are deferred** — the TS adapter ships first; the shared spec + engine make the rest additive.
 
 ---
 

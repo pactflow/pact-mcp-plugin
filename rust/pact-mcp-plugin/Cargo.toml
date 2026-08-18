@@ -32,7 +32,17 @@ rmcp = { version = "2.2", features = [
     "transport-streamable-http-client-reqwest",
     # Streamable HTTP server transport, for the loopback HTTP consumer mock.
     "transport-streamable-http-server",
+    # OAuth2 (client-credentials, SEP-1046). See ADR 0011.
+    "auth",
 ] }
+# Needed directly (not just transitively via rmcp) to build the reqwest
+# clients OAuthState::new/AuthClient::new take (ADR 0011). `rustls` feature
+# (superset of pact_models' `rustls-no-provider`) unifies the crypto-provider
+# requirement across the graph; we install the default provider once at
+# startup (see `crypto::ensure_default_crypto_provider`) since reqwest/rustls
+# don't auto-install it.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 http = "1"
 futures = "0.3"
 tokio-stream = "0.1"

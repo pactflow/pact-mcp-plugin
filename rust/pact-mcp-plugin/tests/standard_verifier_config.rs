@@ -212,6 +212,88 @@ async fn http_interaction_verifies_with_only_host_and_port_config_like_the_stand
     assert!(ok, "expected HTTP verification to pass with host/port-only config: {resp:?}");
 }
 
+/// ADR 0011 / plan T4: an `oauth` `PACT_MCP_AUTH` flows unchanged through
+/// server.rs's existing env-var -> `resolve_config` -> `verify_interaction_http`
+/// seam — no signature changes were needed for OAuth. Reuses the same mocked
+/// token-endpoint fixture as the T3 transport-level tests.
+#[tokio::test]
+async fn http_interaction_verifies_with_oauth_client_credentials_via_pact_mcp_auth_env() {
+    let (mut fixture, port) = {
+        let server = repo_root().join("examples/fixtures/weather-http-server.mjs");
+        let mut cmd = StdCommand::new("node");
+        cmd.arg(&server)
+            .env("REQUIRE_BEARER", "grpc-mock-access-token")
+            .env("OAUTH_ACCESS_TOKEN", "grpc-mock-access-token")
+            .stdout(StdStdio::piped())
+            .stderr(StdStdio::null());
+        let mut child = cmd.spawn().expect("spawn http fixture server");
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read port line");
+        let parsed: serde_json::Value = serde_json::from_str(line.trim()).expect("port json");
+        (child, parsed["port"].as_u64().expect("port"))
+    };
+
+    let auth_json = json!({
+        "type": "oauth",
+        "grant": "client_credentials",
+        "clientId": "test-client",
+        "clientSecret": "test-secret",
+        "scopes": ["mcp:verify"]
+    })
+    .to_string();
+    let (mut plugin, handshake) = spawn_plugin(&[("PACT_MCP_AUTH", &auth_json)]).await;
+    let mut client = connect(&handshake).await;
+
+    let req = verify_request(
+        pact_json("mcp-http"),
+        "adapter-stamped-key-1",
+        json!({ "host": "127.0.0.1", "port": port, "providerState": {} }),
+    );
+    let resp = client.verify_interaction(req).await.expect("verify call").into_inner();
+    let ok = expect_success(&resp);
+
+    let _ = plugin.kill().await;
+    let _ = fixture.kill();
+    assert!(ok, "expected HTTP verification to pass via oauth PACT_MCP_AUTH: {resp:?}");
+}
+
+/// A failed token exchange (no mocked token endpoint on the fixture here)
+/// must surface as a clear error, mirroring how a 401 surfaces today —
+/// never a panic or a silently-passed verification.
+#[tokio::test]
+async fn oauth_token_exchange_failure_surfaces_as_a_clear_verify_error() {
+    let (mut fixture, port) = spawn_http_fixture();
+
+    let auth_json = json!({
+        "type": "oauth",
+        "clientId": "test-client",
+        "clientSecret": "test-secret"
+    })
+    .to_string();
+    let (mut plugin, handshake) = spawn_plugin(&[("PACT_MCP_AUTH", &auth_json)]).await;
+    let mut client = connect(&handshake).await;
+
+    let req = verify_request(
+        pact_json("mcp-http"),
+        "adapter-stamped-key-1",
+        json!({ "host": "127.0.0.1", "port": port, "providerState": {} }),
+    );
+    let result = client.verify_interaction(req).await;
+
+    let message = match result {
+        Ok(resp) => match resp.into_inner().response {
+            Some(verify_interaction_response::Response::Error(e)) => e,
+            other => panic!("expected an error response, got: {other:?}"),
+        },
+        Err(status) => status.message().to_string(),
+    };
+    let _ = plugin.kill().await;
+    let _ = fixture.kill();
+    assert!(!message.is_empty(), "expected a non-empty error message for a failed oauth exchange");
+}
+
 #[tokio::test]
 async fn stdio_interaction_verifies_with_spawn_config_from_env_vars() {
     let server = repo_root().join("examples/fixtures/weather-server.mjs");

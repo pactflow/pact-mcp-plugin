@@ -51,6 +51,55 @@ describe("McpProviderVerifier — pact-js VerifierOptions assembly", () => {
     expect(JSON.parse(env.PACT_MCP_AUTH)).toEqual({ type: "bearer", token: "${T}" });
   });
 
+  // ADR 0011 / plan T5: no engine round-trip here (that's the deferred e2e) —
+  // just pin that an `oauth` HttpAuth serializes to PACT_MCP_AUTH the same
+  // way the other auth kinds do.
+  it("maps an oauth client-credentials auth to PACT_MCP_AUTH", () => {
+    const { env } = new McpProviderVerifier({ provider: "weather-mcp", pactUrls: ["p.json"] })
+      .withServerTransport({
+        type: "http",
+        url: "https://mcp.example.com/mcp",
+        auth: {
+          type: "oauth",
+          clientId: "${MCP_OAUTH_CLIENT_ID}",
+          clientSecret: "${MCP_OAUTH_CLIENT_SECRET}",
+          scopes: ["mcp:verify"],
+        },
+      })
+      .buildVerifierConfig();
+
+    expect(JSON.parse(env.PACT_MCP_AUTH)).toEqual({
+      type: "oauth",
+      clientId: "${MCP_OAUTH_CLIENT_ID}",
+      clientSecret: "${MCP_OAUTH_CLIENT_SECRET}",
+      scopes: ["mcp:verify"],
+    });
+  });
+
+  it("maps an oauth auth with an explicit grant and resource to PACT_MCP_AUTH", () => {
+    const { env } = new McpProviderVerifier({ provider: "weather-mcp", pactUrls: ["p.json"] })
+      .withServerTransport({
+        type: "http",
+        url: "https://mcp.example.com/mcp",
+        auth: {
+          type: "oauth",
+          grant: "client_credentials",
+          clientId: "my-client",
+          clientSecret: "my-secret",
+          resource: "https://mcp.example.com/mcp",
+        },
+      })
+      .buildVerifierConfig();
+
+    expect(JSON.parse(env.PACT_MCP_AUTH)).toEqual({
+      type: "oauth",
+      grant: "client_credentials",
+      clientId: "my-client",
+      clientSecret: "my-secret",
+      resource: "https://mcp.example.com/mcp",
+    });
+  });
+
   it("forwards broker source, selectors, publish + state handlers to pact-js", () => {
     const handler = async () => ({});
     const { options } = new McpProviderVerifier({
